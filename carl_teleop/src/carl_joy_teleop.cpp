@@ -17,7 +17,8 @@
 
 using namespace std;
 
-carl_joy_teleop::carl_joy_teleop()
+carl_joy_teleop::carl_joy_teleop() :
+    acHome("carl_moveit_wrapper/common_actions/ready_arm", true)
 {
   // a private handle for this ROS node (allows retrieval of relative parameters)
   ros::NodeHandle private_nh("~");
@@ -29,10 +30,15 @@ carl_joy_teleop::carl_joy_teleop()
     cmd_vel = node.advertise<geometry_msgs::Twist>("cmd_vel_safety_check", 10);
   else
     cmd_vel = node.advertise<geometry_msgs::Twist>("cmd_vel", 10);
+  angular_cmd = node.advertise<wpi_jaco_msgs::AngularCommand>("jaco_arm/angular_cmd", 10);
   cartesian_cmd = node.advertise<wpi_jaco_msgs::CartesianCommand>("jaco_arm/cartesian_cmd", 10);
+  cartesian_cmd2 = node.advertise<geometry_msgs::Twist>("carl_moveit_wrapper/cartesian_control", 10);
   asus_servo_tilt_cmd = node.advertise<std_msgs::Float64>("asus_controller/tilt", 10);
   creative_servo_pan_cmd = node.advertise<std_msgs::Float64>("creative_controller/pan", 10);
   joy_sub = node.subscribe<sensor_msgs::Joy>("joy", 10, &carl_joy_teleop::joy_cback, this);
+
+  segment_client = node.serviceClient<std_srvs::Empty>("rail_segmentation/segment_auto");
+  eStopClient = node.serviceClient<wpi_jaco_msgs::EStop>("jaco_arm/software_estop");
 
   // read in throttle values
   private_nh.param<double>("linear_throttle_factor_base", linear_throttle_factor_base, 1.0);
@@ -48,6 +54,9 @@ carl_joy_teleop::carl_joy_teleop()
     controllerType = ANALOG;
 
   // initialize everything
+  leftBumperPrev = 0;
+  rightBumperPrev = 0;
+  rightStickPrev = 0;
   deadman = false;
   stopMessageSentArm = true;
   stopMessageSentFinger = true;
@@ -63,6 +72,12 @@ carl_joy_teleop::carl_joy_teleop()
   cartesianCmd.armCommand = true;
   cartesianCmd.fingerCommand = false;
   cartesianCmd.repeat = true;
+
+  /*
+  ROS_INFO("Waiting for home arm server...");
+  acHome.waitForServer();
+  ROS_INFO("Home arm server found.");
+*/
 
   ROS_INFO("CARL Joystick Teleop Started");
 
@@ -123,16 +138,40 @@ void carl_joy_teleop::joy_cback(const sensor_msgs::Joy::ConstPtr& joy)
   if (controllerType == DIGITAL)
   {
     if (joy->buttons.at(8) == 1)
+    {
       EStopEnabled = true;
+      wpi_jaco_msgs::EStop srv;
+      srv.request.enableEStop = true;
+      if (!eStopClient.call(srv))
+        ROS_INFO("Couldn't call software estop service.");
+    }
     else if (joy->buttons.at(9) == 1)
+    {
       EStopEnabled = false;
+      wpi_jaco_msgs::EStop srv;
+      srv.request.enableEStop = false;
+      if (!eStopClient.call(srv))
+        ROS_INFO("Couldn't call software estop service.");
+    }
   }
   else
   {
     if (joy->buttons.at(6) == 1)
+    {
       EStopEnabled = true;
+      wpi_jaco_msgs::EStop srv;
+      srv.request.enableEStop = true;
+      if (!eStopClient.call(srv))
+        ROS_INFO("Couldn't call software estop service.");
+    }
     else if (joy->buttons.at(7) == 1)
+    {
       EStopEnabled = false;
+      wpi_jaco_msgs::EStop srv;
+      srv.request.enableEStop = false;
+      if (!eStopClient.call(srv))
+        ROS_INFO("Couldn't call software estop service.");
+    }
   }
 
   //help menu
@@ -296,6 +335,28 @@ void carl_joy_teleop::joy_cback(const sensor_msgs::Joy::ConstPtr& joy)
         cartesianCmd.arm.angular.y = joy->axes.at(3) * MAX_ANG_VEL_ARM * angular_throttle_factor_arm;
       }
 
+      //for testing alternate Cartesian controllers...
+      if (cartesianCmd.arm.linear.x != 0.0 || cartesianCmd.arm.linear.y != 0.0 || cartesianCmd.arm.linear.z != 0.0
+      || cartesianCmd.arm.angular.x != 0.0 || cartesianCmd.arm.angular.y != 0.0
+      || cartesianCmd.arm.angular.z != 0.0)
+      {
+        cartesianCmd2.linear.x = cartesianCmd.arm.linear.x;
+        cartesianCmd2.linear.y = cartesianCmd.arm.linear.y;
+        cartesianCmd2.linear.z = cartesianCmd.arm.linear.z;
+        cartesianCmd2.angular.x = cartesianCmd.arm.angular.x;
+        cartesianCmd2.angular.y = cartesianCmd.arm.angular.y;
+        cartesianCmd2.angular.z = cartesianCmd.arm.angular.z;
+      }
+      else
+      {
+        cartesianCmd2.linear.x = 0.0;
+        cartesianCmd2.linear.y = 0.0;
+        cartesianCmd2.linear.z = 0.0;
+        cartesianCmd2.angular.x = 0.0;
+        cartesianCmd2.angular.y = 0.0;
+        cartesianCmd2.angular.z = 0.0;
+      }
+
       //mode switching
       if (joy->buttons.at(button1Index) == 1 || joy->buttons.at(button3Index) == 1 || joy->buttons.at(button4Index) == 1)
       {
@@ -386,7 +447,7 @@ void carl_joy_teleop::joy_cback(const sensor_msgs::Joy::ConstPtr& joy)
         fingerCmd.fingers[0] = 0.0;
         fingerCmd.fingers[1] = 0.0;
         fingerCmd.fingers[2] = 0.0;
-        cartesian_cmd.publish(fingerCmd);
+        angular_cmd.publish(fingerCmd);
         
         if (joy->buttons.at(button2Index) == 1)
         {
@@ -425,7 +486,63 @@ void carl_joy_teleop::joy_cback(const sensor_msgs::Joy::ConstPtr& joy)
       {
         creative_servo_pan_cmd.publish(cameraPanCommand);
       }
-      
+
+      //bumpers to issue arm retract and home commands
+      if (joy->buttons.at(4) != leftBumperPrev)
+      {
+        if (joy->buttons.at(4) == 1)
+        {
+          //send home command
+          wpi_jaco_msgs::HomeArmGoal homeGoal;
+          homeGoal.retract = false;
+          acHome.sendGoal(homeGoal);
+        }
+        leftBumperPrev = joy->buttons.at(4);
+      }
+      if (joy->buttons.at(5) != rightBumperPrev)
+      {
+        if (joy->buttons.at(5) == 1)
+        {
+          //send retract command
+          wpi_jaco_msgs::HomeArmGoal homeGoal;
+          homeGoal.retract = true;
+          homeGoal.retractPosition.position = true;
+          homeGoal.retractPosition.armCommand = true;
+          homeGoal.retractPosition.fingerCommand = false;
+          homeGoal.retractPosition.repeat = false;
+          homeGoal.retractPosition.joints.resize(6);
+          homeGoal.retractPosition.joints[0] = -2.57;
+          homeGoal.retractPosition.joints[1] = 1.39;
+          homeGoal.retractPosition.joints[2] = .527;
+          homeGoal.retractPosition.joints[3] = -.084;
+          homeGoal.retractPosition.joints[4] = .515;
+          homeGoal.retractPosition.joints[5] = -1.745;
+          acHome.sendGoal(homeGoal);
+        }
+        rightBumperPrev = joy->buttons.at(5);
+      }
+
+      //stick click for segmentation
+      int rightStickIndex;
+      if (controllerType == DIGITAL)
+        rightStickIndex = 11;
+      else
+        rightStickIndex = 10;
+
+      if (joy->buttons.at(rightStickIndex) != rightStickPrev)
+      {
+        if (joy->buttons.at(rightStickIndex) == 1)
+        {
+          //send segment command
+          std_srvs::Empty srv;
+          if (!segment_client.call(srv))
+          {
+            ROS_INFO("Could not call segmentation client.");
+          }
+        }
+        rightStickPrev = joy->buttons.at(rightStickIndex);
+      }
+
       //mode switch
       if (joy->buttons.at(button2Index) == 1)
       {
@@ -453,22 +570,7 @@ void carl_joy_teleop::publish_velocity()
   //using this node, but for any other nodes controlling the arm this will
   //instead significantly slow down any motion)
   if (EStopEnabled)
-  {
-    cartesianCmd.arm.linear.x = 0.0;
-    cartesianCmd.arm.linear.y = 0.0;
-    cartesianCmd.arm.linear.z = 0.0;
-    cartesianCmd.arm.angular.x = 0.0;
-    cartesianCmd.arm.angular.y = 0.0;
-    cartesianCmd.arm.angular.z = 0.0;
-    fingerCmd.fingers[0] = 0.0;
-    fingerCmd.fingers[1] = 0.0;
-    fingerCmd.fingers[2] = 0.0;
-
-    cartesian_cmd.publish(cartesianCmd);
-    cartesian_cmd.publish(fingerCmd);
-
     return;
-  }
 
   switch (mode)
   {
@@ -489,6 +591,7 @@ void carl_joy_teleop::publish_velocity()
       {
         // send the arm command
         cartesian_cmd.publish(cartesianCmd);
+        //cartesian_cmd2.publish(cartesianCmd2);
         stopMessageSentArm = false;
       }
       break;
@@ -499,14 +602,14 @@ void carl_joy_teleop::publish_velocity()
       {
         if (!stopMessageSentFinger)
         {
-          cartesian_cmd.publish(fingerCmd);
+          angular_cmd.publish(fingerCmd);
           stopMessageSentFinger = true;
         }
       }
       else
       {
         //send the finger velocity command
-        cartesian_cmd.publish(fingerCmd);
+        angular_cmd.publish(fingerCmd);
         stopMessageSentFinger = false;
       }
       break;
@@ -568,7 +671,7 @@ void carl_joy_teleop::displayHelp(int menuNumber)
     break;
     case 4:
       puts("|            Sensor Controls             |*");
-      puts("|                                        |*");
+      puts("|    home arm              retract arm   |*");
       puts("|    ________                ________    |*");
       puts("|   /    _   \\______________/        \\   |*");
       puts("|  |   _| |_    < >    < >     (4)    |  |*");
@@ -576,7 +679,7 @@ void carl_joy_teleop::displayHelp(int menuNumber)
       puts("|  |    |_|    ___      ___    (2)    |  |*");
       puts("|  |          /   \\    /   \\          |  |*");
       puts("|  |          \\___/    \\___/          |  |*");
-      puts("|  |                  asus tilt       |  |*");
+      puts("|  |               asus tilt/segment|    |*");
       puts("|  |        _______/--\\_______        |  |*");
     break;
   }

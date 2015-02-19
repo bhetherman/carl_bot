@@ -2,6 +2,35 @@
 Changelog for package carl_description
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.0.16 (2015-02-17)
+-------------------
+
+0.0.15 (2015-02-10)
+-------------------
+
+0.0.14 (2015-02-06)
+-------------------
+
+0.0.13 (2015-01-21)
+-------------------
+* New camera calibrations
+* Contributors: David Kent
+
+0.0.12 (2015-01-19)
+-------------------
+* Orientation filter ignores accelerometer measurements when anything more than the gravity vector is detected
+* Added joints to CARL urdf to allow for orientation adjustments from IMU data, implemented a static orientation correction from accelerometer data
+* Contributors: David Kent
+
+0.0.11 (2014-12-18)
+-------------------
+* travis fix
+* fixed minifiy
+* minify script
+* no more pre-built file
+* Updated transform between asus mount and asus; added carl_tools for miscellaneous packages, currently including calibration for the asus camera transform.
+* Contributors: David Kent, Russell Toris
+
 0.0.10 (2014-12-02)
 -------------------
 * reverted rviz

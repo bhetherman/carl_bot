@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package>
   <name>carl_bringup</name>
-  <version>0.0.10</version>
+  <version>0.0.16</version>
   <description>CARL Bringup Launch Scripts</description>
 
   <maintainer email="rctoris@wpi.edu">Russell Toris</maintainer>
@@ -36,4 +36,5 @@
   <!-- CARL -->
   <run_depend>carl_teleop</run_depend>
   <run_depend>carl_interactive_manipulation</run_depend>
+  <run_depend>carl_safety</run_depend>
 </package>

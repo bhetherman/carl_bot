@@ -22,14 +22,28 @@
 #include <rail_segmentation/RemoveObject.h>
 #include <rail_segmentation/SegmentedObjectList.h>
 #include <wpi_jaco_msgs/CartesianCommand.h>
+#include <wpi_jaco_msgs/EStop.h>
 #include <wpi_jaco_msgs/ExecuteGraspAction.h>
 #include <wpi_jaco_msgs/ExecutePickupAction.h>
+#include <wpi_jaco_msgs/GetCartesianPosition.h>
 #include <wpi_jaco_msgs/HomeArmAction.h>
 #include <wpi_jaco_msgs/JacoFK.h>
 #include <wpi_jaco_msgs/QuaternionToEuler.h>
 #include <sensor_msgs/JointState.h>
 #include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/point_cloud_conversion.h>
+#include <std_srvs/Empty.h>
+
+//over current thresholds
+#define J1_THRESHOLD  7.0
+#define J2_THRESHOLD  25.5
+#define J3_THRESHOLD 14.0
+#define J4_THRESHOLD  5.0
+#define J5_THRESHOLD  5.0
+#define J6_THRESHOLD 3.5
+#define F1_THRESHOLD  1.5
+#define F2_THRESHOLD  1.5
+#define F3_THRESHOLD 1.5
 
 /*!
  * \class jacoInteractiveManipulation
@@ -62,6 +76,12 @@ public:
   void processPickupMarkerFeedback(const visualization_msgs::InteractiveMarkerFeedbackConstPtr &feedback);
 
   /**
+  * \brief Process feedback for objects that are selected for removal.
+  * @param feedback interactive marker feedback
+  */
+  void processRemoveMarkerFeedback(const visualization_msgs::InteractiveMarkerFeedbackConstPtr &feedback);
+
+  /**
    * \brief Callback for the joint state listener
    * @param msg new joint state message
    */
@@ -86,6 +106,13 @@ public:
 private:
 
   /**
+  * \brief Remove a manipulation object marker
+  * @param index object index
+  * @return true if object was successfully removed
+  */
+  bool removeObjectMarker(int index);
+
+  /**
    * \brief Create the interactive marker on the JACO's end effector, including pose controls and menus
    */
   void makeHandMarker();
@@ -95,6 +122,11 @@ private:
    */
   void sendStopCommand();
 
+  /**
+  * \brief If interactive markers cause the arm to be in a dangerous collision, briefly reverse arm motion
+  */
+  void armCollisionRecovery();
+
   ros::NodeHandle n;
 
   //messages
@@ -103,8 +135,11 @@ private:
   ros::Subscriber segmentedObjectsSubscriber;
 
   //services
-  ros::ServiceClient jacoFkClient;	//!< forward kinematics
-  ros::ServiceClient qeClient;	//!< rotation representation conversion client
+  ros::ServiceClient armCartesianPositionClient;
+  ros::ServiceClient armEStopClient;
+  ros::ServiceClient eraseTrajectoriesClient;
+  ros::ServiceClient jacoFkClient;  //!< forward kinematics
+  ros::ServiceClient qeClient;  //!< rotation representation conversion client
   ros::ServiceClient pickupSegmentedClient;
   ros::ServiceClient removeObjectClient;
 
@@ -113,13 +148,16 @@ private:
   actionlib::SimpleActionClient<wpi_jaco_msgs::ExecutePickupAction> acPickup;
   actionlib::SimpleActionClient<wpi_jaco_msgs::HomeArmAction> acHome;
 
-  boost::shared_ptr<interactive_markers::InteractiveMarkerServer> imServer;	//!< interactive marker server
-  interactive_markers::MenuHandler menuHandler;	//!< interactive marker menu handler
+  boost::shared_ptr<interactive_markers::InteractiveMarkerServer> imServer; //!< interactive marker server
+  interactive_markers::MenuHandler menuHandler; //!< interactive marker menu handler
   interactive_markers::MenuHandler objectMenuHandler; //!< object interactive markers menu handler
   std::vector<interactive_markers::MenuHandler> recognizedMenuHandlers; //!< list of customized menu handlers for recognized objects
   std::vector<visualization_msgs::InteractiveMarker> segmentedObjects;
-  std::vector<float> joints;	//!< current joint state
-  bool lockPose;//!< flag to stop the arm from updating on pose changes, this is used to prevent the slight movement when left clicking on the center of the marker
+  std::vector<float> joints;  //!< current joint state
+  std::vector<float> markerPose; //!< current pose of the gripper marker
+  bool lockPose;  //!< flag to stop the arm from updating on pose changes, this is used to prevent the slight movement when left clicking on the center of the marker
+  bool movingArm;
+  bool disableArmMarkerCommands;
 };
 
 #endif

@@ -2,6 +2,34 @@
 Changelog for package carl_teleop
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.0.16 (2015-02-17)
+-------------------
+* Changed teleop segment call to segment_auto
+* Contributors: David Kent
+
+0.0.15 (2015-02-10)
+-------------------
+
+0.0.14 (2015-02-06)
+-------------------
+* home/retract action input adjustment
+* teleop adjustment for estop and home/retract with planning
+* Set arm estop calls on the joystick controller
+* Removed wait on home arm server so that the node can be started while running only CARL's basic functionality
+* Switched home/retract actions to use motion planning, added home/retract/segment calls from joystick teleop
+* Contributors: David Kent
+
+0.0.13 (2015-01-21)
+-------------------
+
+0.0.12 (2015-01-19)
+-------------------
+
+0.0.11 (2014-12-18)
+-------------------
+* Fixed bug in IM where menu hover could cause pickup commands, added IM frontend and launch, updated joystick and keyboard teleop to use angular commands for finger commands so that fingers can be controlled even when the arm is in/near singularities, and updated metapackage manifest
+* Contributors: David Kent
+
 0.0.10 (2014-12-02)
 -------------------
 * deleted everything

@@ -2,6 +2,32 @@
 Changelog for package carl_bringup
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.0.16 (2015-02-17)
+-------------------
+
+0.0.15 (2015-02-10)
+-------------------
+* Updated base.launch so that CARL can be turned on while charging.
+* Contributors: David Kent
+
+0.0.14 (2015-02-06)
+-------------------
+* Main bringup launch file now launches basic safety (tipping prevention and arm over current warning)
+* Contributors: David Kent
+
+0.0.13 (2015-01-21)
+-------------------
+* New camera calibrations
+* Contributors: David Kent
+
+0.0.12 (2015-01-19)
+-------------------
+* Orientation filter ignores accelerometer measurements when anything more than the gravity vector is detected
+* Contributors: David Kent
+
+0.0.11 (2014-12-18)
+-------------------
+
 0.0.10 (2014-12-02)
 -------------------
 * deleted everything

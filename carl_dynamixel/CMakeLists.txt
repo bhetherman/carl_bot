@@ -4,7 +4,24 @@ project(carl_dynamixel)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS roscpp dynamixel_msgs sensor_msgs)
+find_package(catkin REQUIRED COMPONENTS roscpp dynamixel_msgs sensor_msgs tf)
+
+#######################################
+## Declare ROS messages and services ##
+#######################################
+
+## Generate services in the 'srv' folder
+add_service_files(
+  FILES
+  LookAtFrame.srv
+  LookAtPoint.srv
+)
+
+## Generate added messages and services with any dependencies listed here
+generate_messages(
+  DEPENDENCIES
+  geometry_msgs
+)
 
 ###################################################
 ## Declare things to be passed to other projects ##
@@ -29,10 +46,6 @@ add_executable(back_joints_node src/back_joint_node.cpp)
 add_executable(servo_pan_tilt src/servo_pan_tilt.cpp)
 add_executable(front_joints_node src/front_joint_node.cpp)
 
-## Add cmake target dependencies of the executable/library
-## as an example, message headers may need to be generated before nodes
-# add_dependencies(carl_dynamixel_node carl_dynamixel_generate_messages_cpp)
-
 ## Specify libraries to link a library or executable target against
 target_link_libraries(back_joints_node
   ${catkin_LIBRARIES}
@@ -44,6 +57,8 @@ target_link_libraries(servo_pan_tilt
 target_link_libraries(front_joints_node
   ${catkin_LIBRARIES}
 )
+
+add_dependencies(servo_pan_tilt ${PROJECT_NAME}_generate_messages_cpp)
 
 #############
 ## Install ##
