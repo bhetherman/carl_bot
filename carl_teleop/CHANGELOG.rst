@@ -2,6 +2,18 @@
 Changelog for package carl_teleop
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.0.19 (2015-03-27)
+-------------------
+
+0.0.18 (2015-03-27)
+-------------------
+* Merge branch 'develop' of github.com:WPI-RAIL/carl_bot into develop
+* Switched to the new ready/retract action provided by carl_moveit_common_actions
+* Contributors: David Kent
+
+0.0.17 (2015-03-24)
+-------------------
+
 0.0.16 (2015-02-17)
 -------------------
 * Changed teleop segment call to segment_auto

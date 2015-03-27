@@ -3,16 +3,16 @@
 using namespace std;
 
 CarlInteractiveManipulation::CarlInteractiveManipulation() :
-    acGrasp("jaco_arm/manipulation/grasp", true), acPickup("jaco_arm/manipulation/pickup", true), acHome(
-        "carl_moveit_wrapper/common_actions/ready_arm", true)
+    acGripper("jaco_arm/manipulation/gripper", true), acLift("jaco_arm/manipulation/lift", true), acArm(
+        "carl_moveit_wrapper/common_actions/arm_action", true), acRecognize("rail_recognition/recognize", true)
 {
   joints.resize(6);
 
   //messages
   cartesianCmd = n.advertise<wpi_jaco_msgs::CartesianCommand>("jaco_arm/cartesian_cmd", 1);
+  segmentedObjectsPublisher = n.advertise<rail_manipulation_msgs::SegmentedObjectList>("rail_segmentation/segmented_objects", 1);
   jointStateSubscriber = n.subscribe("jaco_arm/joint_states", 1, &CarlInteractiveManipulation::updateJoints, this);
-  segmentedObjectsSubscriber = n.subscribe("rail_segmentation/segmented_objects_visualization", 1,
-                                           &CarlInteractiveManipulation::segmentedObjectsCallback, this);
+  recognizedObjectsSubscriber = n.subscribe("rail_recognition/recognized_objects", 1, &CarlInteractiveManipulation::segmentedObjectsCallback, this);
 
   //services
   armCartesianPositionClient = n.serviceClient<wpi_jaco_msgs::GetCartesianPosition>("jaco_arm/get_cartesian_position");
@@ -25,9 +25,9 @@ CarlInteractiveManipulation::CarlInteractiveManipulation() :
 
   //actionlib
   ROS_INFO("Waiting for grasp, and pickup action servers...");
-  acGrasp.waitForServer();
-  acPickup.waitForServer();
-  acHome.waitForServer();
+  acGripper.waitForServer();
+  acLift.waitForServer();
+  acArm.waitForServer();
   ROS_INFO("Finished waiting for action servers");
 
   markerPose.resize(6);
@@ -43,6 +43,7 @@ CarlInteractiveManipulation::CarlInteractiveManipulation() :
   makeHandMarker();
 
   //setup object menu
+  objectMenuHandler.insert("Recognize",  boost::bind(&CarlInteractiveManipulation::processRecognizeMarkerFeedback, this, _1));
   objectMenuHandler.insert("Pickup", boost::bind(&CarlInteractiveManipulation::processPickupMarkerFeedback, this, _1));
   objectMenuHandler.insert("Remove", boost::bind(&CarlInteractiveManipulation::processRemoveMarkerFeedback, this, _1));
 
@@ -70,8 +71,11 @@ void CarlInteractiveManipulation::updateJoints(const sensor_msgs::JointState::Co
 }
 
 void CarlInteractiveManipulation::segmentedObjectsCallback(
-    const rail_segmentation::SegmentedObjectList::ConstPtr& objectList)
+    const rail_manipulation_msgs::SegmentedObjectList::ConstPtr& objectList)
 {
+  //store list of objects
+  segmentedObjectList = *objectList;
+
   ROS_INFO("Received new segmented point clouds");
   clearSegmentedObjects();
   recognizedMenuHandlers.clear();
@@ -79,7 +83,7 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
   for (unsigned int i = 0; i < objectList->objects.size(); i++)
   {
     visualization_msgs::InteractiveMarker objectMarker;
-    objectMarker.header = objectList->objects[i].objectCloud.header;
+    objectMarker.header = objectList->objects[i].marker.header;
 
     objectMarker.pose.position.x = 0.0;
     objectMarker.pose.position.y = 0.0;
@@ -94,8 +98,9 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
     ss << "object" << i;
     objectMarker.name = ss.str();
 
+    /*
     visualization_msgs::Marker cloudMarker;
-    cloudMarker.header = objectList->objects[i].objectCloud.header;
+    cloudMarker.header = objectList->objects[i].point_cloud.header;
     cloudMarker.type = visualization_msgs::Marker::CUBE_LIST;
     if (objectList->objects[i].recognized)
     {
@@ -113,7 +118,7 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
 
     //add point cloud to cloud marker
     sensor_msgs::PointCloud cloudCopy;
-    sensor_msgs::convertPointCloud2ToPointCloud(objectList->objects[i].objectCloud, cloudCopy);
+    sensor_msgs::convertPointCloud2ToPointCloud(objectList->objects[i].point_cloud, cloudCopy);
     cloudMarker.scale.x = .01;
     cloudMarker.scale.y = .01;
     cloudMarker.scale.z = .01;
@@ -133,6 +138,7 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
     xAvg /= cloudCopy.points.size();
     yAvg /= cloudCopy.points.size();
     zAvg /= cloudCopy.points.size();
+    */
 
     visualization_msgs::InteractiveMarkerControl objectControl;
     ss << "control";
@@ -141,7 +147,8 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
     //objectControl.interaction_mode = visualization_msgs::InteractiveMarkerControl::MENU;
     objectControl.always_visible = true;
     objectControl.markers.resize(1);
-    objectControl.markers[0] = cloudMarker;
+    //objectControl.markers[0] = cloudMarker;
+    objectControl.markers[0] = objectList->objects[i].marker;
     objectMarker.controls.push_back(objectControl);
 
     //object label
@@ -153,15 +160,11 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
     objectLabelControl.interaction_mode = visualization_msgs::InteractiveMarkerControl::NONE;
     objectLabelControl.always_visible = true;
     visualization_msgs::Marker objectLabel;
-    objectLabel.header = objectList->objects[i].objectCloud.header;
+    objectLabel.header = objectList->objects[i].point_cloud.header;
     objectLabel.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
-    objectLabel.pose.position.x = xAvg;
-    objectLabel.pose.position.y = yAvg;
-    objectLabel.pose.position.z = zAvg + .1;
-    objectLabel.pose.orientation.x = 0;
-    objectLabel.pose.orientation.y = 0;
-    objectLabel.pose.orientation.z = 0;
-    objectLabel.pose.orientation.w = 1;
+    objectLabel.pose.position.x = objectList->objects[i].centroid.x;
+    objectLabel.pose.position.y = objectList->objects[i].centroid.y;
+    objectLabel.pose.position.z = objectList->objects[i].centroid.z + .1;
     objectLabel.scale.x = .1;
     objectLabel.scale.y = .1;
     objectLabel.scale.z = .1;
@@ -193,7 +196,7 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
       recognizedMenuHandlers[i].apply(*imServer, objectMarker.name);
     }
     else
-    {  
+    {
       objectMenuHandler.apply(*imServer, objectMarker.name);
     }
 
@@ -302,12 +305,12 @@ void CarlInteractiveManipulation::makeHandMarker()
   iMarker.controls.push_back(control);
 
   //menu
-  interactive_markers::MenuHandler::EntryHandle fingersSubMenuHandle = menuHandler.insert("Fingers");
-  menuHandler.insert(fingersSubMenuHandle, "Grasp",
+  interactive_markers::MenuHandler::EntryHandle fingersSubMenuHandle = menuHandler.insert("Gripper");
+  menuHandler.insert(fingersSubMenuHandle, "Close",
                      boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
-  menuHandler.insert(fingersSubMenuHandle, "Release",
+  menuHandler.insert(fingersSubMenuHandle, "Open",
                      boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
-  menuHandler.insert("Pickup", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
+  menuHandler.insert("Lift", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
   menuHandler.insert("Home", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
   menuHandler.insert("Retract", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
 
@@ -320,6 +323,19 @@ void CarlInteractiveManipulation::makeHandMarker()
   imServer->setCallback(iMarker.name, boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
 
   menuHandler.apply(*imServer, iMarker.name);
+}
+
+void CarlInteractiveManipulation::processRecognizeMarkerFeedback(
+    const visualization_msgs::InteractiveMarkerFeedbackConstPtr &feedback)
+{
+  if (feedback->event_type == visualization_msgs::InteractiveMarkerFeedback::MENU_SELECT)
+  {
+    int objectIndex = atoi(feedback->marker_name.substr(6).c_str());
+    rail_manipulation_msgs::RecognizeGoal goal;
+    goal.index = objectIndex;
+    acRecognize.sendGoal(goal);
+    acRecognize.waitForResult(ros::Duration(10.0));
+  }
 }
 
 void CarlInteractiveManipulation::processPickupMarkerFeedback(
@@ -374,137 +390,120 @@ void CarlInteractiveManipulation::processHandMarkerFeedback(
 {
   switch (feedback->event_type)
   {
-    //Send a stop command so that when the marker is released the arm stops moving
-    case visualization_msgs::InteractiveMarkerFeedback::BUTTON_CLICK:
-      if (feedback->marker_name.compare("jaco_hand_marker") == 0)
+  //Send a stop command so that when the marker is released the arm stops moving
+  case visualization_msgs::InteractiveMarkerFeedback::BUTTON_CLICK:
+    if (feedback->marker_name.compare("jaco_hand_marker") == 0)
+    {
+      lockPose = true;
+      movingArm = false;
+      if (disableArmMarkerCommands)
+        disableArmMarkerCommands = false;
+      sendStopCommand();
+    }
+    break;
+
+    //Menu actions
+  case visualization_msgs::InteractiveMarkerFeedback::MENU_SELECT:
+    if (feedback->marker_name.compare("jaco_hand_marker") == 0)
+    {
+      if (feedback->menu_entry_id == 2)	//grasp requested
       {
-        lockPose = true;
-        movingArm = false;
-        if (disableArmMarkerCommands)
-          disableArmMarkerCommands = false;
-        sendStopCommand();
+        rail_manipulation_msgs::GripperGoal gripperGoal;
+        gripperGoal.close = true;
+        acGripper.sendGoal(gripperGoal);
       }
-      break;
-
-      //Menu actions
-    case visualization_msgs::InteractiveMarkerFeedback::MENU_SELECT:
-      if (feedback->marker_name.compare("jaco_hand_marker") == 0)
+      else if (feedback->menu_entry_id == 3)	//release requested
       {
-        if (feedback->menu_entry_id == 2)	//grasp requested
-        {
-          wpi_jaco_msgs::ExecuteGraspGoal graspGoal;
-          graspGoal.closeGripper = true;
-          graspGoal.limitFingerVelocity = false;
-          acGrasp.sendGoal(graspGoal);
-        }
-        else if (feedback->menu_entry_id == 3)	//release requested
-        {
-          wpi_jaco_msgs::ExecuteGraspGoal graspGoal;
-          graspGoal.closeGripper = false;
-          graspGoal.limitFingerVelocity = false;
-          acGrasp.sendGoal(graspGoal);
-        }
-        else if (feedback->menu_entry_id == 4)	//pickup requested
-        {
-          wpi_jaco_msgs::ExecutePickupGoal pickupGoal;
-          pickupGoal.limitFingerVelocity = false;
-          pickupGoal.setLiftVelocity = false;
-          acPickup.sendGoal(pickupGoal);
-        }
-        else if (feedback->menu_entry_id == 5)  //home requested
-        {
-          acGrasp.cancelAllGoals();
-          acPickup.cancelAllGoals();
-          wpi_jaco_msgs::HomeArmGoal homeGoal;
-          homeGoal.retract = false;
-          homeGoal.numAttempts = 3;
-          acHome.sendGoal(homeGoal);
-          acHome.waitForResult(ros::Duration(10.0));
-        }
-        else if (feedback->menu_entry_id == 6)
-        {
-          acGrasp.cancelAllGoals();
-          acPickup.cancelAllGoals();
-          wpi_jaco_msgs::HomeArmGoal homeGoal;
-          homeGoal.retract = true;
-          homeGoal.retractPosition.position = true;
-          homeGoal.retractPosition.armCommand = true;
-          homeGoal.retractPosition.fingerCommand = false;
-          homeGoal.retractPosition.repeat = false;
-          homeGoal.retractPosition.joints.resize(6);
-          homeGoal.retractPosition.joints[0] = -2.57;
-          homeGoal.retractPosition.joints[1] = 1.39;
-          homeGoal.retractPosition.joints[2] = .527;
-          homeGoal.retractPosition.joints[3] = -.084;
-          homeGoal.retractPosition.joints[4] = .515;
-          homeGoal.retractPosition.joints[5] = -1.745;
-          homeGoal.numAttempts = 3;
-          acHome.sendGoal(homeGoal);
-          acHome.waitForResult(ros::Duration(15.0));
-        }
+        rail_manipulation_msgs::GripperGoal gripperGoal;
+        gripperGoal.close = false;
+        acGripper.sendGoal(gripperGoal);
       }
-      break;
-
-      //Send movement commands to the arm to follow the pose marker
-    case visualization_msgs::InteractiveMarkerFeedback::POSE_UPDATE:
-      if (feedback->marker_name.compare("jaco_hand_marker") == 0
-          && feedback->control_name.compare("jaco_hand_origin_marker") != 0)
+      else if (feedback->menu_entry_id == 4)	//pickup requested
       {
-        if (!(lockPose || disableArmMarkerCommands))
-        {
-          movingArm = true;
-
-          acGrasp.cancelAllGoals();
-          acPickup.cancelAllGoals();
-
-          //convert pose for compatibility with JACO API
-          wpi_jaco_msgs::QuaternionToEuler qeSrv;
-          qeSrv.request.orientation = feedback->pose.orientation;
-          if (qeClient.call(qeSrv))
-          {
-            wpi_jaco_msgs::CartesianCommand cmd;
-            cmd.position = true;
-            cmd.armCommand = true;
-            cmd.fingerCommand = false;
-            cmd.repeat = false;
-            cmd.arm.linear.x = feedback->pose.position.x;
-            cmd.arm.linear.y = feedback->pose.position.y;
-            cmd.arm.linear.z = feedback->pose.position.z;
-            cmd.arm.angular.x = qeSrv.response.roll;
-            cmd.arm.angular.y = qeSrv.response.pitch;
-            cmd.arm.angular.z = qeSrv.response.yaw;
-
-            cartesianCmd.publish(cmd);
-
-            markerPose[0] = feedback->pose.position.x;
-            markerPose[1] = feedback->pose.position.y;
-            markerPose[2] = feedback->pose.position.z;
-            markerPose[3] = qeSrv.response.roll;
-            markerPose[4] = qeSrv.response.pitch;
-            markerPose[5] = qeSrv.response.yaw;
-          }
-          else
-            ROS_INFO("Quaternion to Euler conversion service failed, could not send pose update");
-        }
+        rail_manipulation_msgs::LiftGoal liftGoal;
+        acLift.sendGoal(liftGoal);
       }
-      break;
-
-      //Mouse down events
-    case visualization_msgs::InteractiveMarkerFeedback::MOUSE_DOWN:
-      lockPose = false;
-      break;
-
-      //As with mouse clicked, send a stop command when the mouse is released on the marker
-    case visualization_msgs::InteractiveMarkerFeedback::MOUSE_UP:
-      if (feedback->marker_name.compare("jaco_hand_marker") == 0)
+      else if (feedback->menu_entry_id == 5)  //home requested
       {
-        lockPose = true;
-        movingArm = false;
-        if (disableArmMarkerCommands)
-          disableArmMarkerCommands = false;
-        sendStopCommand();
+        acGripper.cancelAllGoals();
+        acLift.cancelAllGoals();
+        carl_moveit::ArmGoal homeGoal;
+        homeGoal.action = carl_moveit::ArmGoal::READY;
+        acArm.sendGoal(homeGoal);
+        acArm.waitForResult(ros::Duration(10.0));
       }
-      break;
+      else if (feedback->menu_entry_id == 6)
+      {
+        acGripper.cancelAllGoals();
+        acLift.cancelAllGoals();
+        carl_moveit::ArmGoal homeGoal;
+        homeGoal.action = carl_moveit::ArmGoal::RETRACT;
+        acArm.sendGoal(homeGoal);
+        acArm.waitForResult(ros::Duration(15.0));
+      }
+    }
+    break;
+
+    //Send movement commands to the arm to follow the pose marker
+  case visualization_msgs::InteractiveMarkerFeedback::POSE_UPDATE:
+    if (feedback->marker_name.compare("jaco_hand_marker") == 0
+        && feedback->control_name.compare("jaco_hand_origin_marker") != 0)
+    {
+      if (!(lockPose || disableArmMarkerCommands))
+      {
+        movingArm = true;
+
+        acGripper.cancelAllGoals();
+        acLift.cancelAllGoals();
+
+        //convert pose for compatibility with JACO API
+        wpi_jaco_msgs::QuaternionToEuler qeSrv;
+        qeSrv.request.orientation = feedback->pose.orientation;
+        if (qeClient.call(qeSrv))
+        {
+          wpi_jaco_msgs::CartesianCommand cmd;
+          cmd.position = true;
+          cmd.armCommand = true;
+          cmd.fingerCommand = false;
+          cmd.repeat = false;
+          cmd.arm.linear.x = feedback->pose.position.x;
+          cmd.arm.linear.y = feedback->pose.position.y;
+          cmd.arm.linear.z = feedback->pose.position.z;
+          cmd.arm.angular.x = qeSrv.response.roll;
+          cmd.arm.angular.y = qeSrv.response.pitch;
+          cmd.arm.angular.z = qeSrv.response.yaw;
+
+          cartesianCmd.publish(cmd);
+
+          markerPose[0] = feedback->pose.position.x;
+          markerPose[1] = feedback->pose.position.y;
+          markerPose[2] = feedback->pose.position.z;
+          markerPose[3] = qeSrv.response.roll;
+          markerPose[4] = qeSrv.response.pitch;
+          markerPose[5] = qeSrv.response.yaw;
+        }
+        else
+          ROS_INFO("Quaternion to Euler conversion service failed, could not send pose update");
+      }
+    }
+    break;
+
+    //Mouse down events
+  case visualization_msgs::InteractiveMarkerFeedback::MOUSE_DOWN:
+    lockPose = false;
+    break;
+
+    //As with mouse clicked, send a stop command when the mouse is released on the marker
+  case visualization_msgs::InteractiveMarkerFeedback::MOUSE_UP:
+    if (feedback->marker_name.compare("jaco_hand_marker") == 0)
+    {
+      lockPose = true;
+      movingArm = false;
+      if (disableArmMarkerCommands)
+        disableArmMarkerCommands = false;
+      sendStopCommand();
+    }
+    break;
   }
 
   //Update interactive marker server
