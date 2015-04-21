@@ -17,13 +17,13 @@
 #include <ros/ros.h>
 #include <actionlib/client/simple_action_client.h>
 #include <carl_moveit/ArmAction.h>
+#include <carl_moveit/PickupAction.h>
+#include <carl_safety/Error.h>
 #include <interactive_markers/interactive_marker_server.h>
 #include <interactive_markers/menu_handler.h>
 #include <rail_manipulation_msgs/GripperAction.h>
 #include <rail_manipulation_msgs/LiftAction.h>
-#include <rail_manipulation_msgs/RecognizeAction.h>
 #include <rail_manipulation_msgs/SegmentedObjectList.h>
-#include <rail_pick_and_place_msgs/PickupSegmentedObject.h>
 #include <rail_segmentation/RemoveObject.h>
 #include <wpi_jaco_msgs/CartesianCommand.h>
 #include <wpi_jaco_msgs/EStop.h>
@@ -74,7 +74,7 @@ public:
    * /brief Process feedback for objects that can be recognized.
    * @param feedback interactive marker feedback
    */
-  void processRecognizeMarkerFeedback(const visualization_msgs::InteractiveMarkerFeedbackConstPtr &feedback);
+  //void processRecognizeMarkerFeedback(const visualization_msgs::InteractiveMarkerFeedbackConstPtr &feedback);
 
   /**
    * /brief Process feedback for objects that can be picked up.
@@ -139,6 +139,7 @@ private:
   //messages
   ros::Publisher cartesianCmd;
   ros::Publisher segmentedObjectsPublisher;
+  ros::Publisher safetyErrorPublisher;
   ros::Subscriber jointStateSubscriber;
   ros::Subscriber recognizedObjectsSubscriber;
 
@@ -148,14 +149,15 @@ private:
   ros::ServiceClient eraseTrajectoriesClient;
   ros::ServiceClient jacoFkClient;  //!< forward kinematics
   ros::ServiceClient qeClient;  //!< rotation representation conversion client
-  ros::ServiceClient pickupSegmentedClient;
+//  ros::ServiceClient pickupSegmentedClient;
   ros::ServiceClient removeObjectClient;
+  ros::ServiceClient detachObjectsClient;
 
   //actionlib
   actionlib::SimpleActionClient<rail_manipulation_msgs::GripperAction> acGripper;
-  actionlib::SimpleActionClient<rail_manipulation_msgs::LiftAction> acLift;
   actionlib::SimpleActionClient<carl_moveit::ArmAction> acArm;
-  actionlib::SimpleActionClient<rail_manipulation_msgs::RecognizeAction> acRecognize;
+  actionlib::SimpleActionClient<carl_moveit::PickupAction> acPickup;
+  //actionlib::SimpleActionClient<rail_manipulation_msgs::RecognizeAction> acRecognize;
 
   boost::shared_ptr<interactive_markers::InteractiveMarkerServer> imServer; //!< interactive marker server
   interactive_markers::MenuHandler menuHandler; //!< interactive marker menu handler
@@ -168,6 +170,7 @@ private:
   bool lockPose;  //!< flag to stop the arm from updating on pose changes, this is used to prevent the slight movement when left clicking on the center of the marker
   bool movingArm;
   bool disableArmMarkerCommands;
+  bool usingPickup;
 };
 
 #endif

@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package>
   <name>carl_bringup</name>
-  <version>0.0.19</version>
+  <version>0.0.26</version>
   <description>CARL Bringup Launch Scripts</description>
 
   <maintainer email="rctoris@wpi.edu">Russell Toris</maintainer>
@@ -41,5 +41,6 @@
 
   <!-- MISC -->
   <run_depend>rail_segmentation</run_depend>
+  <run_depend>rail_recognition</run_depend>
   <run_depend>rail_pick_and_place_tools</run_depend>
 </package>

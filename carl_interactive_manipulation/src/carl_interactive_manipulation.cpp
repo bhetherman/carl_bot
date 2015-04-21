@@ -3,16 +3,23 @@
 using namespace std;
 
 CarlInteractiveManipulation::CarlInteractiveManipulation() :
-    acGripper("jaco_arm/manipulation/gripper", true), acLift("jaco_arm/manipulation/lift", true), acArm(
-        "carl_moveit_wrapper/common_actions/arm_action", true), acRecognize("rail_recognition/recognize", true)
+    acGripper("jaco_arm/manipulation/gripper", true),
+    acArm("carl_moveit_wrapper/common_actions/arm_action", true),
+    acPickup("carl_moveit_wrapper/common_actions/pickup", true)
 {
   joints.resize(6);
+
+  //read parameters
+  ros::NodeHandle pnh("~");
+  usingPickup = false;
+  pnh.getParam("using_pickup", usingPickup);
 
   //messages
   cartesianCmd = n.advertise<wpi_jaco_msgs::CartesianCommand>("jaco_arm/cartesian_cmd", 1);
   segmentedObjectsPublisher = n.advertise<rail_manipulation_msgs::SegmentedObjectList>("rail_segmentation/segmented_objects", 1);
+  safetyErrorPublisher = n.advertise<carl_safety::Error>("carl_safety/error", 1);
   jointStateSubscriber = n.subscribe("jaco_arm/joint_states", 1, &CarlInteractiveManipulation::updateJoints, this);
-  recognizedObjectsSubscriber = n.subscribe("rail_recognition/recognized_objects", 1, &CarlInteractiveManipulation::segmentedObjectsCallback, this);
+  recognizedObjectsSubscriber = n.subscribe("/object_recognition_listener/recognized_objects", 1, &CarlInteractiveManipulation::segmentedObjectsCallback, this);
 
   //services
   armCartesianPositionClient = n.serviceClient<wpi_jaco_msgs::GetCartesianPosition>("jaco_arm/get_cartesian_position");
@@ -20,13 +27,13 @@ CarlInteractiveManipulation::CarlInteractiveManipulation() :
   eraseTrajectoriesClient = n.serviceClient<std_srvs::Empty>("jaco_arm/erase_trajectories");
   jacoFkClient = n.serviceClient<wpi_jaco_msgs::JacoFK>("jaco_arm/kinematics/fk");
   qeClient = n.serviceClient<wpi_jaco_msgs::QuaternionToEuler>("jaco_conversions/quaternion_to_euler");
-  pickupSegmentedClient = n.serviceClient<rail_pick_and_place_msgs::PickupSegmentedObject>("rail_pick_and_place/pickup_segmented_object");
+  //pickupSegmentedClient = n.serviceClient<rail_pick_and_place_msgs::PickupSegmentedObject>("rail_pick_and_place/pickup_segmented_object");
   removeObjectClient = n.serviceClient<rail_segmentation::RemoveObject>("rail_segmentation/remove_object");
+  detachObjectsClient = n.serviceClient<std_srvs::Empty>("carl_moveit_wrapper/detach_objects");
 
   //actionlib
-  ROS_INFO("Waiting for grasp, and pickup action servers...");
+  ROS_INFO("Waiting for grasp action servers...");
   acGripper.waitForServer();
-  acLift.waitForServer();
   acArm.waitForServer();
   ROS_INFO("Finished waiting for action servers");
 
@@ -43,8 +50,8 @@ CarlInteractiveManipulation::CarlInteractiveManipulation() :
   makeHandMarker();
 
   //setup object menu
-  objectMenuHandler.insert("Recognize",  boost::bind(&CarlInteractiveManipulation::processRecognizeMarkerFeedback, this, _1));
-  objectMenuHandler.insert("Pickup", boost::bind(&CarlInteractiveManipulation::processPickupMarkerFeedback, this, _1));
+  if (usingPickup)
+    objectMenuHandler.insert("Pickup", boost::bind(&CarlInteractiveManipulation::processPickupMarkerFeedback, this, _1));
   objectMenuHandler.insert("Remove", boost::bind(&CarlInteractiveManipulation::processRemoveMarkerFeedback, this, _1));
 
   imServer->applyChanges();
@@ -98,48 +105,6 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
     ss << "object" << i;
     objectMarker.name = ss.str();
 
-    /*
-    visualization_msgs::Marker cloudMarker;
-    cloudMarker.header = objectList->objects[i].point_cloud.header;
-    cloudMarker.type = visualization_msgs::Marker::CUBE_LIST;
-    if (objectList->objects[i].recognized)
-    {
-      cloudMarker.color.r = ((float)(rand()) / (float)(RAND_MAX)) / 3.0 + .1;
-      cloudMarker.color.g = ((float)(rand()) / (float)(RAND_MAX)) / 3.0 + .4;
-      cloudMarker.color.b = ((float)(rand()) / (float)(RAND_MAX)) / 4.0 + .75;
-    }
-    else
-    {
-      cloudMarker.color.r = ((float)(rand()) / (float)(RAND_MAX)) / 3.0 + .66;
-      cloudMarker.color.g = ((float)(rand()) / (float)(RAND_MAX)) / 4.0;
-      cloudMarker.color.b = ((float)(rand()) / (float)(RAND_MAX)) / 5.0;
-    }
-    cloudMarker.color.a = 1.0;
-
-    //add point cloud to cloud marker
-    sensor_msgs::PointCloud cloudCopy;
-    sensor_msgs::convertPointCloud2ToPointCloud(objectList->objects[i].point_cloud, cloudCopy);
-    cloudMarker.scale.x = .01;
-    cloudMarker.scale.y = .01;
-    cloudMarker.scale.z = .01;
-    cloudMarker.points.resize(cloudCopy.points.size());
-    float xAvg = 0;
-    float yAvg = 0;
-    float zAvg = 0;
-    for (unsigned int j = 0; j < cloudCopy.points.size(); j++)
-    {
-      cloudMarker.points[j].x = cloudCopy.points[j].x;
-      cloudMarker.points[j].y = cloudCopy.points[j].y;
-      cloudMarker.points[j].z = cloudCopy.points[j].z;
-      xAvg += cloudCopy.points[j].x;
-      yAvg += cloudCopy.points[j].y;
-      zAvg += cloudCopy.points[j].z;
-    }
-    xAvg /= cloudCopy.points.size();
-    yAvg /= cloudCopy.points.size();
-    zAvg /= cloudCopy.points.size();
-    */
-
     visualization_msgs::InteractiveMarkerControl objectControl;
     ss << "control";
     objectControl.name = ss.str();
@@ -188,10 +153,13 @@ void CarlInteractiveManipulation::segmentedObjectsCallback(
 
     if (objectList->objects[i].recognized)
     {
-      stringstream ss2;
-      ss2.str("");
-      ss2 << "Pickup " << objectList->objects[i].name;
-      recognizedMenuHandlers[i].insert(ss2.str(), boost::bind(&CarlInteractiveManipulation::processPickupMarkerFeedback, this, _1));
+      if (usingPickup)
+      {
+        stringstream ss2;
+        ss2.str("");
+        ss2 << "Pickup " << objectList->objects[i].name;
+        recognizedMenuHandlers[i].insert(ss2.str(), boost::bind(&CarlInteractiveManipulation::processPickupMarkerFeedback, this, _1));
+      }
       recognizedMenuHandlers[i].insert("Remove", boost::bind(&CarlInteractiveManipulation::processRemoveMarkerFeedback, this, _1));
       recognizedMenuHandlers[i].apply(*imServer, objectMarker.name);
     }
@@ -310,9 +278,8 @@ void CarlInteractiveManipulation::makeHandMarker()
                      boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
   menuHandler.insert(fingersSubMenuHandle, "Open",
                      boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
-  menuHandler.insert("Lift", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
-  menuHandler.insert("Home", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
-  menuHandler.insert("Retract", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
+  menuHandler.insert("Ready Arm", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
+  menuHandler.insert("Retract Arm", boost::bind(&CarlInteractiveManipulation::processHandMarkerFeedback, this, _1));
 
   visualization_msgs::InteractiveMarkerControl menuControl;
   menuControl.interaction_mode = visualization_msgs::InteractiveMarkerControl::MENU;
@@ -325,37 +292,48 @@ void CarlInteractiveManipulation::makeHandMarker()
   menuHandler.apply(*imServer, iMarker.name);
 }
 
-void CarlInteractiveManipulation::processRecognizeMarkerFeedback(
-    const visualization_msgs::InteractiveMarkerFeedbackConstPtr &feedback)
-{
-  if (feedback->event_type == visualization_msgs::InteractiveMarkerFeedback::MENU_SELECT)
-  {
-    int objectIndex = atoi(feedback->marker_name.substr(6).c_str());
-    rail_manipulation_msgs::RecognizeGoal goal;
-    goal.index = objectIndex;
-    acRecognize.sendGoal(goal);
-    acRecognize.waitForResult(ros::Duration(10.0));
-  }
-}
+//void CarlInteractiveManipulation::processRecognizeMarkerFeedback(
+//    const visualization_msgs::InteractiveMarkerFeedbackConstPtr &feedback)
+//{
+//  if (feedback->event_type == visualization_msgs::InteractiveMarkerFeedback::MENU_SELECT)
+//  {
+//    int objectIndex = atoi(feedback->marker_name.substr(6).c_str());
+//    rail_manipulation_msgs::RecognizeGoal goal;
+//    goal.index = objectIndex;
+//    acRecognize.sendGoal(goal);
+//    acRecognize.waitForResult(ros::Duration(10.0));
+//  }
+//}
 
 void CarlInteractiveManipulation::processPickupMarkerFeedback(
     const visualization_msgs::InteractiveMarkerFeedbackConstPtr &feedback)
 {
   if (feedback->event_type == visualization_msgs::InteractiveMarkerFeedback::MENU_SELECT)
   {
-    rail_pick_and_place_msgs::PickupSegmentedObject::Request req;
-    rail_pick_and_place_msgs::PickupSegmentedObject::Response res;
-    req.objectIndex = atoi(feedback->marker_name.substr(6).c_str());
-    if (!pickupSegmentedClient.call(req, res))
+    carl_moveit::PickupGoal pickupGoal;
+    pickupGoal.lift = true;
+    pickupGoal.verify = false;
+    int objectIndex = atoi(feedback->marker_name.substr(6).c_str());
+    for (unsigned int i = 0; i < segmentedObjectList.objects[objectIndex].grasps.size(); i ++)
     {
-      ROS_INFO("Could not call pickup service.");
-      return;
+      ROS_INFO("ATTEMPTING PICKUP WITH GRASP %d", i);
+      pickupGoal.pose = segmentedObjectList.objects[objectIndex].grasps[i];
+      acPickup.sendGoal(pickupGoal);
+      acPickup.waitForResult(ros::Duration(30.0));
+
+      carl_moveit::PickupResultConstPtr pickupResult = acPickup.getResult();
+      if (!pickupResult->success)
+      {
+	ROS_INFO("PICKUP FAILED, moving on to a new grasp...");
+        continue;
+      }
+
+      ROS_INFO("PICKUP SUCCEEDED!");
+
+      removeObjectMarker(objectIndex);
+      break;
     }
-    if (res.success)
-    {
-      if (!removeObjectMarker(req.objectIndex))
-        return;
-    }
+    ROS_INFO("FINISHED ATTEMPTING PICKUPS");
 
     imServer->applyChanges();
   }
@@ -417,25 +395,24 @@ void CarlInteractiveManipulation::processHandMarkerFeedback(
         rail_manipulation_msgs::GripperGoal gripperGoal;
         gripperGoal.close = false;
         acGripper.sendGoal(gripperGoal);
+
+        std_srvs::Empty emptySrv;
+        if (!detachObjectsClient.call(emptySrv))
+        {
+          ROS_INFO("Couldn't call detach objects service.");
+        }
       }
-      else if (feedback->menu_entry_id == 4)	//pickup requested
-      {
-        rail_manipulation_msgs::LiftGoal liftGoal;
-        acLift.sendGoal(liftGoal);
-      }
-      else if (feedback->menu_entry_id == 5)  //home requested
+      else if (feedback->menu_entry_id == 4)  //home requested
       {
         acGripper.cancelAllGoals();
-        acLift.cancelAllGoals();
         carl_moveit::ArmGoal homeGoal;
         homeGoal.action = carl_moveit::ArmGoal::READY;
         acArm.sendGoal(homeGoal);
         acArm.waitForResult(ros::Duration(10.0));
       }
-      else if (feedback->menu_entry_id == 6)
+      else if (feedback->menu_entry_id == 5)
       {
         acGripper.cancelAllGoals();
-        acLift.cancelAllGoals();
         carl_moveit::ArmGoal homeGoal;
         homeGoal.action = carl_moveit::ArmGoal::RETRACT;
         acArm.sendGoal(homeGoal);
@@ -454,7 +431,6 @@ void CarlInteractiveManipulation::processHandMarkerFeedback(
         movingArm = true;
 
         acGripper.cancelAllGoals();
-        acLift.cancelAllGoals();
 
         //convert pose for compatibility with JACO API
         wpi_jaco_msgs::QuaternionToEuler qeSrv;
@@ -624,8 +600,15 @@ void CarlInteractiveManipulation::armCollisionRecovery()
   {
     return;
   }
-  else
-    disableArmMarkerCommands = true;
+
+  disableArmMarkerCommands = true;
+
+  //feedback
+  carl_safety::Error armCollisionError;
+  armCollisionError.message = "Arm in dangerous collision, moving to a safer position...";
+  armCollisionError.severity = 1;
+  armCollisionError.resolved = false;
+  safetyErrorPublisher.publish(armCollisionError);
 
   wpi_jaco_msgs::EStop eStopSrv;
   eStopSrv.request.enableEStop = true;
@@ -648,6 +631,13 @@ void CarlInteractiveManipulation::armCollisionRecovery()
     cartesianCmd.publish(cmd);
     loopRate.sleep();
   }
+
+  //feedback
+  carl_safety::Error armCollisionErrorResolved;
+  armCollisionError.message = "Arm recovered.";
+  armCollisionError.severity = 1;
+  armCollisionError.resolved = true;
+  safetyErrorPublisher.publish(armCollisionErrorResolved);
 }
 
 int main(int argc, char **argv)
